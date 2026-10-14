@@ -1,10 +1,9 @@
 """agent/strategy.py — discovery, delegation, caching, replica, and budget
 POLICY. Where `agent/gateway.py` is the control plane (route / admit /
 authorize / budget — the four JOBS a decision must do), this file is the
-building blocks a real answer to those jobs is made of. Nothing here is
-wired into `Gateway.decide` by default — see agent/gateway.py's own module
-docstring and agent/README.md's table for where each piece is meant to
-plug in. That wiring is the assignment, not a step you're missing.
+    building blocks a real answer to those jobs is made of. Gateway directly
+    uses cheap_mask, successor_of, and pick_replica. Other helpers remain
+    optional utilities, not additional enforcement points.
 
 THE ARITHMETIC THAT MAKES THIS FILE'S EXISTENCE THE LESSON
 ----------------------------------------------------------------------------
@@ -15,14 +14,13 @@ ways to spend a single round, both real, both computed against
 them live rather than just asserting the numbers, so they can never
 silently drift from the real cost table):
 
-    DISCIPLINED  slides.query(fields=[title,body])   base1 + (body3+title1) + 1row*1  =  6
+    DISCIPLINED  slides.query(fields=[title,body])   base1 + (body2+title0) + 1row*1  =  4
                  slides.get_frame(default fields)     base2 + (body2+title0)          =  4
                  registry.provenance(default fields)  base1 + (etag0)                 =  1
                  -------------------------------------------------------
-                 = 11 credits this round — the CEILING of FINAL-PLAN.md 4.3's
-                   "8-11" (a round that skips the provenance re-read, or
-                   reuses a cached body via `ResultCache` below, lands
-                   nearer the floor of that range instead).
+                 = 9 credits this round, under FINAL-PLAN.md 4.3's 11-credit
+                   ceiling. The supplied table's D-10 retune leaves ten
+                   credits after ten complete rounds.
 
     CARELESS     registry.list_servers(fields=[*])    ->            12
                  glossary.list_terms()  (default==full "punishment
@@ -32,15 +30,10 @@ silently drift from the real cost table):
                  = 49 credits — MORE THAN ONE THIRD OF THE WHOLE DUEL'S
                    BUDGET, spent in a single round.
 
-Play at the DISCIPLINED CEILING (11 cr) every single round and 10 rounds
-costs 110 — a hair OVER the 100-credit pool: this file's own `__main__`
-demo shows that combination surviving nine full rounds and only running dry
-paying for the tenth. That is not a bug in the arithmetic; it is the honest
-point — "disciplined" is not a magic number, it is not re-paying for the
-same provenance read or the same frame body every round when you already
-have it (`ResultCache` below, and `BudgetPacer.is_affordable`'s reserve
-floor). Play CARELESS even once and you are mathematically bankrupt by
-round 3 (100 − 49 − 49 < 0) — not because the game is rigged against you,
+The 11-credit ceiling is not a sustainable target for all ten rounds:
+that would cost 110. The retuned nine-credit round costs 90, as verified
+by this module's demo and Gateway's live-credit ten-round scenarios.
+Repeated CARELESS rounds bankrupt the duel by round 3, not because it is rigged,
 but because `registry.list_servers` and `glossary.list_terms` were
 deliberately built so their DEFAULT field mask is their full, expensive
 dump (FINAL-PLAN.md section 4.1: "an audit showed `list_servers` and
@@ -56,6 +49,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Mapping
+from kit.mcp.servers import _LOCAL_TOOL_SPECS
 
 # kit.mcp.specs is a collaborator's file (workspace hard rule 2). It is
 # present and stable as of this writing, but this module must still degrade
@@ -177,7 +171,8 @@ def cheap_mask(server: str, tool: str, fields_you_will_actually_cite: tuple[str,
     available) purely so a caller gets an early, loud `KeyError` for a typo
     rather than a silently wrong mask two calls later."""
     if _SPECS_AVAILABLE and (server, tool) not in TOOL_SPECS:
-        raise KeyError(f"{server}.{tool} is not a known tool in kit.mcp.specs.TOOL_SPECS")
+        if (server, tool) not in _LOCAL_TOOL_SPECS:
+            raise KeyError(f"{server}.{tool} is not a known kit tool")
     return tuple(sorted(set(fields_you_will_actually_cite)))
 
 
@@ -256,38 +251,25 @@ class ReplicaChoice:
     reason: str
 
 
-def pick_replica(*, path_id: str | None, known_drifting: bool, prefers_fresh: bool = True) -> ReplicaChoice:
-    """A starting heuristic for JOB 1 (ROUTE) in `agent/gateway.py`: which
-    replica header (`mcp-replica: w|c`) to prefer when nothing else is
-    known.
+def pick_replica(*, path_id: str | None, known_drifting: bool, prefers_fresh: bool = True,
+                 fresh_replica: str | None = None) -> ReplicaChoice:
+    """Choose an implicit route, never override an explicitly named version.
 
-    `known_drifting` is YOUR OWN judgement call, not something this
-    function derives — a real implementation reads it from a
-    `registry.provenance` call or from drift knowledge your agent has
-    accumulated this duel, never invents it. `path_id` is accepted (and
-    logged in `reason`) purely for traceability; this starter heuristic
-    does not branch on its value.
-
-    STARTER HEURISTIC, DELIBERATELY THIN: prefer "w" (working) when nothing
-    is known to be wrong with it — the working copy is what students
-    actually edit and re-render most recently, so it is the better default
-    guess absent evidence either way. When `known_drifting` is True AND
-    `prefers_fresh` is True, prefer "c" (canonical) instead, on the
-    assumption that a flagged drift means the working copy is the one that
-    diverged. THIS ASSUMPTION IS OFTEN WRONG — CORPUS-FACTS.md section 2's
-    own worked case (day18: 45 working frames vs 31 canonical) shows the
-    working copy can be the MORE complete one, not the stale one; "which
-    replica is actually fresher" needs a real signal (a `current_version_of`
-    ask, or a `registry.provenance` timestamp), not a coin flip on which
-    letter comes first. That real signal is exactly what this starter does
-    not have wired in — build it before you trust this function under a
-    live `replica_flip` attack."""
-    if known_drifting and prefers_fresh:
+    Drift says replicas differ, not which is fresher. fresh_replica is an
+    optional policy input for callers holding actual comparative evidence,
+    not a new command argument. The supplied kit exposes no such trusted
+    history signal: provenance rev is identity and checked_at is None.
+    Gateway therefore leaves freshness unknown. Frame indices must never
+    be copied between replicas, even if a caller knows which is newer.
+    """
+    # Only a caller with actual comparative freshness evidence may supply this.
+    # Provenance rev/replica identifies a version; drift alone proves no ordering.
+    if prefers_fresh and fresh_replica in ("w", "c"):
         return ReplicaChoice(
-            replica="c",
-            reason=f"path_id={path_id!r} is known to drift this duel; preferring canonical as the naive fresher guess",
+            replica=fresh_replica,
+            reason=f"path_id={path_id!r}: caller supplied comparative freshness evidence",
         )
-    return ReplicaChoice(replica="w", reason=f"path_id={path_id!r}: no known drift; default to working")
+    return ReplicaChoice(replica="w", reason=f"path_id={path_id!r}: drift={known_drifting}; freshness unknown, default to working")
 
 
 @dataclass
@@ -396,21 +378,18 @@ if __name__ == "__main__":
     assert succ == ("slides", "query")
     assert successor_of("slides", "query") is None
 
-    print("\n=== BudgetPacer: disciplined-at-the-CEILING barely lasts the duel; careless does not ===\n")
+    print("\n=== BudgetPacer: retuned disciplined rounds survive ten rounds ===\n")
     disciplined_pacer = BudgetPacer()
     for round_no in range(1, ROUNDS_PER_DUEL + 1):
         disciplined_pacer.record_spend(round_no, disciplined)
     print(
-        f"  disciplined (ceiling, {disciplined}cr) x10 rounds -> spent={disciplined_pacer.credits_spent} "
+        f"  disciplined ({disciplined}cr) x10 rounds -> spent={disciplined_pacer.credits_spent} "
         f"credits_left={disciplined_pacer.credits_left} bankrupt_by={disciplined_pacer.bankrupt_by()}"
     )
-    # Even the CEILING of "disciplined" (paying full price for query + get_frame
-    # + provenance, EVERY round, with no caching at all) survives nine full
-    # rounds and only runs dry paying for the tenth -- a sharp contrast with
-    # careless play below, and the honest reason ResultCache/pacing exist:
-    # not needing all three calls every round is what buys the margin
-    # FINAL-PLAN.md 4.3 calls "sustainable".
-    assert disciplined_pacer.bankrupt_by() == ROUNDS_PER_DUEL, disciplined_pacer.bankrupt_by()
+    # The supplied table's D-10 retune makes this 90 credits over ten rounds.
+    assert disciplined == 9
+    assert disciplined_pacer.bankrupt_by() is None
+    assert disciplined_pacer.credits_left == 10
     nine_rounds_pacer = BudgetPacer()
     for round_no in range(1, ROUNDS_PER_DUEL):  # 9 rounds, not 10
         nine_rounds_pacer.record_spend(round_no, disciplined)
@@ -439,13 +418,16 @@ if __name__ == "__main__":
     fresh_pacer = BudgetPacer()
     assert fresh_pacer.is_affordable(1, disciplined) is True
 
-    print("\n=== pick_replica: the naive heuristic, and why it is naive ===\n")
+    print("\n=== pick_replica: drift is not comparative freshness ===\n")
     choice_clean = pick_replica(path_id="d8f95a7b", known_drifting=False)
     choice_drifting = pick_replica(path_id="d8f95a7b", known_drifting=True)
     print(f"  known_drifting=False -> {choice_clean}")
     print(f"  known_drifting=True  -> {choice_drifting}")
     assert choice_clean.replica == "w"
-    assert choice_drifting.replica == "c"
+    assert choice_drifting.replica == "w"
+    assert pick_replica(path_id=None, known_drifting=True, fresh_replica="c").replica == "c"
+    assert pick_replica(path_id=None, known_drifting=True, fresh_replica="c", prefers_fresh=False).replica == "w"
+    assert cheap_mask("research", "search", ("url", "title")) == ("title", "url")
 
     print("\n=== ResultCache: same (anchor, fields) is a hit; a wider mask is a genuine miss ===\n")
     cache = ResultCache()

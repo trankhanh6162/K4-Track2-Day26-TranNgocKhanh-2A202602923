@@ -1,5 +1,12 @@
 # deck/ — cách viết một lá bài · how to author a card
 
+> The current submission is `TranNgocKhanh-2A202602923`. Its lineup plays `blk_01` at round
+> four and benches `atk_10`. The card-by-card descriptions and lineup below
+> refer to the original starter rather than the current individual deck.
+> All ten attack cards now declare `defense_event: "gateway.denied"`, as
+> required by Step 6. Validation still reports the kit's proxy-only lethality
+> warning; it is not proof that the live tournament lethality band was tested.
+
 *Bạn sở hữu thư mục này (RULES.md mục 1). `deck.json` là bộ bài xuất phát — 14 lá hợp lệ, đã
 kiểm chứng bằng dữ liệu thật của kho ngữ liệu. Sửa nó, đừng chỉ dùng nguyên bản; quyết định thú vị
 nhất khi viết một lá bài không nằm ở cú pháp, mà ở việc chọn ASK nào khiến lời nói dối khó bị bắt

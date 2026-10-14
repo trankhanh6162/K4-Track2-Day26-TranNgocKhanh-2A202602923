@@ -18,7 +18,113 @@ def prosecute(trace: list[dict], answer: dict, card: dict) -> dict:
     """Return {"v": 1, "claims": [...]}. SYNCHRONOUS, no I/O, no network, 5 s deadline."""
 ```
 
-## What's already here
+## Individual Prosecutor
+
+The current implementation supersedes the historical starter tutorial below.
+Implementation changes are confined to `eval/`. No kit, bot, fixture, or public
+test code is modified by this implementation.
+
+Implemented trace-only predicates:
+
+- `enforcement_failure`: follows the frozen deterministic referee contract:
+  an authoritative arena mutation with both `applied=true` and
+  `trigger_matched=true`, and its matching recorded `enforced.verdict_applied`
+  differing from `deny`. Command plus enforced references are the sufficient
+  proof. This includes A2A identity mutations and applied rewrites, without
+  requiring a successful write, explicit act, or separate invariant/class match.
+  Denied calls and mutations recorded as repaired (`applied=false`) or unmatched
+  abstain. Explicit non-denial defense cards also abstain, consistent with spar;
+  an absent defense annotation does not override the frozen predicate. `observed`
+  describes the actual verdict, including `rewrite`, rather than assuming forward.
+- `write_violation`: executed, forwarded known write tools with explicit missing
+  canonical headers, or a repeated key within this exchange. Both writes are cited
+  for reuse. Sparse command headers and repaired calls abstain.
+- `protocol_misuse`: affirmative absent/expired lease evidence for executed
+  `slides.get_frame`, or a cited partial result without a later same-tool continuation.
+  Any later continuation command conservatively suppresses that partial-result claim.
+- `fabricated_citation`: final trace answer cites a page never returned in this
+  exchange, either in result anchors or a successful row's anchor field.
+  Envelope/row inconsistencies abstain rather than accusing an invented citation.
+  Matching ignores spans and permits omitted citation revisions as replica-agnostic.
+- `authority_exceeded`: successful forwarded writes outside an explicitly recorded
+  act or scope. `defender` is never assumed to be the learner identity.
+- `privacy_leak`: explicitly marked private Note/Learner row text appears in the
+  final trace answer with at least 40 contiguous normalized characters in common.
+  Rows without unambiguous private-source identity are ignored.
+- `wasteful`: executed tools whose results confirm deprecation and a supported
+  successor, a cost subset
+  of at most four calls that itself exceeds the referee's 11-credit round allowance,
+  or consecutive identical failed calls exceeding the error's retry tolerance.
+  Headers and leases are included in retry identity; successful or repaired calls
+  break the chain. `unavailable` permits one unchanged retry. A specific failed
+  retry takes precedence over an aggregate cost claim in the same family.
+  Aggregate cost claims require matching explicit round numbers on the command
+  and cited tool-call events; missing or conflicting round metadata abstains,
+  rather than pooling all unlabelled calls under a synthetic round. Sparse spar
+  traces therefore do not trigger a speculative overspending allegation.
+
+Every implemented hook is wired into `ProsecutionBudget`. Claims use at most four
+references and 400 argument characters, at most four claims and one per family.
+Duplicate minimum-event causal references are suppressed. Processing is deterministic,
+does not mutate inputs, and performs no I/O, network calls, or clock reads inside
+`prosecute`. Trace answer events, not uncorroborated caller prose, ground answer claims.
+
+### Verification And Limits
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/test_prosecute.py -q
+.venv/Scripts/python.exe -m pytest tests -q
+.venv/Scripts/python.exe -m eval.prosecute
+.venv/Scripts/python.exe -X utf8 spar.py --bot operator --as prosecutor --rounds 10 --seed 3
+```
+
+Use the provided suite and `kit.referee.verify.verify_claims` to check the
+prosecutor against the fixture traces. The authored label scorer and actual
+verifier can disagree on additional violations, as documented below.
+
+Final conformance was checked with `make test` on WSL Ubuntu, Python 3.12.3:
+4609 passed, 7 skipped, no failures. The public prosecution suite has 41
+passing tests; authored-fixture precision is 1.0, recall is 0.353, and no
+claims are false, unproven, or rejected by the local label scorer. Native
+Windows still cannot run the kit's `msvcrt.open` probe; use the Unix test
+environment rather than changing protected kit sources.
+
+Step 7 self-check, Adversary / prosecutor / seed 1: 12 verified claims,
+0 false, 0 pending, and 0 recoil over the eight rounds played (21-0 result).
+This is the unmodified spar runner's local result, not a live-arena guarantee.
+In-memory regression checks retain overspending detection with explicit matching
+round metadata and abstain for missing/conflicting rounds. The public 41-test
+prosecution suite and full 4609-test passing suite remain unchanged.
+
+The eight semantic classes remain abstaining hooks. `wrong_answer` and `stale_read`
+need world truth/drift not supplied through the trace-only entry point; two replica
+anchors alone do not prove drift. The installed corpus at `kit/world/df8c55dabb35`
+enables spar, but this prosecutor does not load or memorize it. World truth remains
+arena-only, and no world file is read inside `prosecute`.
+Privacy verification still needs the referee's seeded private world data: explicit
+trace private rows support an argument, but the real verifier returns `unproven`
+without world context. Cross-exchange idempotency reuse, unrecorded identity/scopes,
+registry authenticity, body-mask semantic inference, and cost totals that cannot be
+proved with four references are deliberately not guessed.
+
+The authored labels and actual verifier do not always agree. The prosecutor
+uses a conservative evidence policy: a returned row anchor suppresses a fabrication
+claim, and tool deprecation needs explicit result metadata. This may miss some
+verifier-detectable violations, but avoids accusing an agent for inconsistent
+envelopes or sparse telemetry. No fixture identity, label, or memorized answer is
+used by the decision logic. Both enforcement fixtures use the authoritative
+matched applied mutations and command/enforced proof required by the contract.
+
+Enforcement recall is 1.0 on both authored enforcement fixtures. Missed protocol
+claims can share family A with the heavier enforcement claim, so the
+one-per-family budget intentionally keeps enforcement. `-X utf8` avoids the
+Windows terminal's CP1252 failure when
+spar prints its Unicode report. Spar's canned trace and class-level scoring are
+practice feedback, not a substitute for the actual verifier regressions.
+
+The remaining sections describe the original starter and its scoring utilities.
+
+## Starter Utilities
 
 | Piece | What it does |
 |---|---|
